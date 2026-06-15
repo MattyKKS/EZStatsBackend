@@ -1,0 +1,115 @@
+// EZStats data model.
+//
+// Scope right now (Progress 1 / Feature #2 — Football Team Management):
+//   User, Team, Player, Match.
+//
+// The schema is intentionally forward-looking so later milestones slot in
+// without a redesign:
+//   - User holds passwordHash for Feature #1 (auth, Progress 2) — unused for now.
+//   - Match carries video/run/status fields for Features #3/#4 (upload + cloud
+//     processing, Final Progress) and links to the AI worker's output run.
+//   - PlayerTrackMap is the seam for Feature #6 (player ID mapping) — mapping a
+//     worker tracking id to a real Player.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// A coach / analyst account. Auth is wired later (Feature #1); for now an owner
+/// is optional so team management works without login.
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  teams        Team[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// A football team the user manages (roster + match sessions).
+model Team {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  primaryColor   String? // jersey colors — also used by the worker for team classification
+  secondaryColor String?
+
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  ownerId String?
+
+  players Player[]
+  matches Match[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// A player on the roster.
+model Player {
+  id           String  @id @default(uuid())
+  name         String
+  jerseyNumber Int?
+  position     String?
+
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+
+  trackMaps PlayerTrackMap[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([teamId, jerseyNumber])
+}
+
+/// A match session: details entered up front, plus the analysis lifecycle.
+model Match {
+  id            String   @id @default(uuid())
+  date          DateTime?
+  opponent      String?
+  teamColor     String?
+  opponentColor String?
+
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+
+  // --- AI worker integration (Features #3/#4) ---
+  status     MatchStatus @default(CREATED)
+  videoPath  String? // uploaded source video
+  runId      String? // EZ Stats AI Worker outputs/<run_id>
+  reportPath String? // location of match_report_merged.json
+
+  trackMaps PlayerTrackMap[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Feature #6 — maps a worker-generated tracking id (per match) to a real Player.
+model PlayerTrackMap {
+  id      String @id @default(uuid())
+  match   Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  matchId String
+  trackId Int // the worker's track_id from match_report_merged.json
+  player  Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  playerId String
+
+  createdAt DateTime @default(now())
+
+  @@unique([matchId, trackId])
+}
+
+enum MatchStatus {
+  CREATED // session created, no video yet
+  UPLOADED // video uploaded, awaiting processing
+  QUEUED // enqueued to the AI worker
+  PROCESSING // worker running
+  COMPLETED // outputs ready
+  FAILED
+}

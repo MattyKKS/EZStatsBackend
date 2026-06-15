@@ -1,0 +1,57 @@
+# EZStats backend — local stack.
+#
+# For day-to-day dev you only need Postgres from here:
+#     docker compose up -d postgres
+# then run the API on your host with `npm run start:dev`.
+#
+# To run the whole thing in containers (API + DB):
+#     docker compose up --build
+#
+# Redis is included but commented-in only when we add the BullMQ job queue
+# (Feature #4, cloud video processing). It is harmless to leave running.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ezstats-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ezstats}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ezstats}
+      POSTGRES_DB: ${POSTGRES_DB:-ezstats}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ezstats-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ezstats}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ezstats-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    profiles: ["queue"] # only starts with: docker compose --profile queue up
+
+  backend:
+    build: .
+    container_name: ezstats-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Inside the compose network the DB host is the service name, not localhost.
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-ezstats}:${POSTGRES_PASSWORD:-ezstats}@postgres:5432/${POSTGRES_DB:-ezstats}?schema=public"
+      PORT: 4000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "4000:4000"
+    profiles: ["full"] # only starts with: docker compose --profile full up --build
+
+volumes:
+  ezstats-pgdata:
