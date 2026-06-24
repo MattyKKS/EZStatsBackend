@@ -39,6 +39,7 @@ model Team {
   description    String?
   primaryColor   String? // jersey colors — also used by the worker for team classification
   secondaryColor String?
+  logoUrl        String? // relative path served at /api/uploads/... (file lives in uploads/)
 
   owner   User?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   ownerId String?

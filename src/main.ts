@@ -1,12 +1,21 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'path';
+import { mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Everything lives under /api so the frontend can point at http://localhost:4000/api
   app.setGlobalPrefix('api');
+
+  // Serve uploaded files (team logos, etc.) at /api/uploads/<file>.
+  // Stored on local disk now; swap this folder for S3/Supabase later with no API change.
+  const uploadsDir = join(process.cwd(), 'uploads');
+  mkdirSync(uploadsDir, { recursive: true });
+  app.useStaticAssets(uploadsDir, { prefix: '/api/uploads/' });
 
   // Validate + strip unknown fields on every incoming DTO.
   app.useGlobalPipes(

@@ -36,6 +36,8 @@ All paths are relative to the base URL. JSON in/out. Methods matter.
 | GET | `/teams/:id` | — | `Team & { players: Player[]; matches: Match[] }` |
 | PATCH | `/teams/:id` | `Partial<CreateTeam>` | `Team` |
 | DELETE | `/teams/:id` | — | deleted `Team` (cascades players + matches) |
+| POST | `/teams/:id/logo` | **multipart** field `file` (image) | `Team` (with `logoUrl` set) |
+| DELETE | `/teams/:id/logo` | — | `Team` (with `logoUrl` cleared) |
 
 ### Players (roster) — nested for create/list, direct for item ops
 | Method | Path | Body | Returns |
@@ -71,6 +73,7 @@ export type Team = {
   description: string | null;
   primaryColor: string | null;
   secondaryColor: string | null;
+  logoUrl: string | null; // e.g. "/uploads/team-<id>-<ts>.png" — see "Team logo" below
   ownerId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -166,6 +169,48 @@ createMatch(teamId, body)          // POST   /teams/:teamId/matches
 updateMatch(id, body)              // PATCH  /matches/:id
 deleteMatch(id)                    // DELETE /matches/:id
 ```
+
+## Team logo (file upload — persists, fixes the "gone on refresh" bug)
+
+The logo is a real uploaded file stored by the backend, not client-only state.
+
+**Upload** — send `multipart/form-data` with a single field named `file`. Do NOT
+set a `Content-Type` header manually; let the browser set the multipart boundary.
+
+```ts
+async function uploadTeamLogo(teamId: string, file: File): Promise<Team> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE_URL}/teams/${teamId}/logo`, {
+    method: "POST",
+    body: form, // no headers — browser sets multipart boundary
+  });
+  if (!res.ok) throw new Error(`logo upload → ${res.status}`);
+  return res.json();
+}
+
+function deleteTeamLogo(teamId: string) {
+  return fetch(`${BASE_URL}/teams/${teamId}/logo`, { method: "DELETE" });
+}
+```
+
+- Allowed types: png, jpg/jpeg, webp, svg. Max size: 2 MB. Wrong type → 400,
+  too big → 400. Rejected files are not stored.
+- The response `Team.logoUrl` is a **relative path** like
+  `/uploads/team-<id>-<ts>.png`.
+
+**Displaying it** — build the absolute URL by prefixing with the API base
+(`logoUrl` already starts with `/uploads`, and the backend serves it under
+`/api/uploads`, which matches the base URL that ends in `/api`):
+
+```ts
+const src = team.logoUrl ? `${BASE_URL}${team.logoUrl}` : PLACEHOLDER;
+// e.g. http://localhost:4000/api/uploads/team-<id>-<ts>.png
+<img src={src} alt={team.name} />
+```
+
+After a successful upload, refetch the team (or use the returned object) so the
+new `logoUrl` is in state — it now survives refresh because it's persisted.
 
 ## Do not break the build
 

@@ -24,3 +24,7 @@ npm-debug.log*
 
 # local AI-worker outputs mounted for ingestion (never commit run data)
 /worker_outputs
+
+# uploaded files (team logos, etc.) — keep the folder, ignore its contents
+/uploads/*
+!/uploads/.gitkeep
