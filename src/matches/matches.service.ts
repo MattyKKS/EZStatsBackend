@@ -1,7 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import { join, resolve, sep } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMatchDto } from './dto/create-match.dto';
 import { UpdateMatchDto } from './dto/update-match.dto';
+
+// Filenames differ between the curated demo folder and a raw worker run, so we
+// probe candidates in priority order (merged/cleaned first, raw as fallback).
+const REPORT_FILES = ['match_report_merged.json', 'match_report.json'];
+const VIDEO_FILES: Record<'stats' | 'spatial', string[]> = {
+  stats: ['stats_video.mp4', 'processed_video.mp4'],
+  spatial: ['spatial_video.mp4', 'radar_video.mp4'],
+};
 
 @Injectable()
 export class MatchesService {
@@ -54,5 +65,72 @@ export class MatchesService {
   async remove(id: string) {
     await this.findOne(id);
     return this.prisma.match.delete({ where: { id } });
+  }
+
+  // --- AI worker output serving (Features #3/#4) ---
+  //
+  // A match's analysis lives on disk under WORKER_OUTPUTS_DIR/<runId> (the same
+  // folder the AI worker writes to). Until a real run is linked, we fall back to
+  // WORKER_DEMO_DIR so the dashboard has data to show. A missing file yields a
+  // 404, which the frontend already handles by showing its mock fallback.
+
+  /** Resolve the on-disk run directory for a match, or null if none exists. */
+  private resolveRunDir(runId: string | null): string | null {
+    const base = process.env.WORKER_OUTPUTS_DIR?.trim();
+    if (base && runId) {
+      const dir = join(base, runId);
+      if (existsSync(dir)) return dir;
+    }
+    const demo = process.env.WORKER_DEMO_DIR?.trim();
+    if (demo && existsSync(demo)) return demo;
+    return null;
+  }
+
+  /** Run directory for a match id, throwing 404 when nothing is available. */
+  private async runDirFor(id: string): Promise<string> {
+    const match = await this.findOne(id);
+    const dir = this.resolveRunDir(match.runId);
+    if (!dir) throw new NotFoundException(`No analysis output for match ${id}`);
+    return dir;
+  }
+
+  /** First of `names` that exists in `dir`, else null. */
+  private firstExisting(dir: string, names: string[]): string | null {
+    for (const name of names) {
+      const file = join(dir, name);
+      if (existsSync(file)) return file;
+    }
+    return null;
+  }
+
+  /** Parsed match_report_merged.json (the frontend's MatchReport contract). */
+  async getReport(id: string): Promise<unknown> {
+    const dir = await this.runDirFor(id);
+    const file = this.firstExisting(dir, REPORT_FILES);
+    if (!file) throw new NotFoundException(`No report file for match ${id}`);
+    return JSON.parse(await readFile(file, 'utf8'));
+  }
+
+  /** Absolute path to a match's overlay video, throwing 404 when absent. */
+  async videoFile(id: string, kind: 'stats' | 'spatial'): Promise<string> {
+    const dir = await this.runDirFor(id);
+    const file = this.firstExisting(dir, VIDEO_FILES[kind]);
+    if (!file) throw new NotFoundException(`No ${kind} video for match ${id}`);
+    return file;
+  }
+
+  /**
+   * Absolute path to a player-crop image referenced by the report's crop_path
+   * (e.g. "player_crops/track_0001/frame_000000.jpg"). Guarded against path
+   * traversal so a crafted path can't escape the run directory.
+   */
+  async cropFile(id: string, cropPath: string): Promise<string> {
+    const root = resolve(await this.runDirFor(id));
+    const target = resolve(root, cropPath);
+    if (target !== root && !target.startsWith(root + sep)) {
+      throw new NotFoundException('Invalid crop path');
+    }
+    if (!existsSync(target)) throw new NotFoundException('Crop not found');
+    return target;
   }
 }
