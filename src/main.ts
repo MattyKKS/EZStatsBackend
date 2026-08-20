@@ -3,10 +3,14 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Parse the httpOnly auth cookie so the JWT strategy can read it.
+  app.use(cookieParser());
 
   // Everything lives under /api so the frontend can point at http://localhost:4000/api
   app.setGlobalPrefix('api');
@@ -15,6 +19,7 @@ async function bootstrap() {
   // Stored on local disk now; swap this folder for S3/Supabase later with no API change.
   const uploadsDir = join(process.cwd(), 'uploads');
   mkdirSync(uploadsDir, { recursive: true });
+  mkdirSync(join(uploadsDir, 'videos'), { recursive: true });
   app.useStaticAssets(uploadsDir, { prefix: '/api/uploads/' });
 
   // Validate + strip unknown fields on every incoming DTO.

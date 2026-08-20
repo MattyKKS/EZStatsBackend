@@ -18,13 +18,16 @@ const VIDEO_FILES: Record<'stats' | 'spatial', string[]> = {
 export class MatchesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async assertTeamExists(teamId: string) {
+  // A team must exist AND belong to the current user, else 404 (no leak).
+  private async assertTeamOwned(teamId: string, userId: string) {
     const team = await this.prisma.team.findUnique({ where: { id: teamId } });
-    if (!team) throw new NotFoundException(`Team ${teamId} not found`);
+    if (!team || team.ownerId !== userId) {
+      throw new NotFoundException(`Team ${teamId} not found`);
+    }
   }
 
-  async create(teamId: string, dto: CreateMatchDto) {
-    await this.assertTeamExists(teamId);
+  async create(teamId: string, dto: CreateMatchDto, userId: string) {
+    await this.assertTeamOwned(teamId, userId);
     return this.prisma.match.create({
       data: {
         teamId,
@@ -36,25 +39,27 @@ export class MatchesService {
     });
   }
 
-  async findAllForTeam(teamId: string) {
-    await this.assertTeamExists(teamId);
+  async findAllForTeam(teamId: string, userId: string) {
+    await this.assertTeamOwned(teamId, userId);
     return this.prisma.match.findMany({
       where: { teamId },
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId: string) {
     const match = await this.prisma.match.findUnique({
       where: { id },
       include: { team: true },
     });
-    if (!match) throw new NotFoundException(`Match ${id} not found`);
+    if (!match || match.team.ownerId !== userId) {
+      throw new NotFoundException(`Match ${id} not found`);
+    }
     return match;
   }
 
-  async update(id: string, dto: UpdateMatchDto) {
-    await this.findOne(id);
+  async update(id: string, dto: UpdateMatchDto, userId: string) {
+    await this.findOne(id, userId);
     const { date, ...rest } = dto;
     return this.prisma.match.update({
       where: { id },
@@ -62,17 +67,34 @@ export class MatchesService {
     });
   }
 
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, userId: string) {
+    await this.findOne(id, userId);
     return this.prisma.match.delete({ where: { id } });
+  }
+
+  /** Attach an uploaded video file to a match (local storage for now). */
+  async setVideo(id: string, videoPath: string, userId: string) {
+    await this.findOne(id, userId);
+    return this.prisma.match.update({
+      where: { id },
+      data: { videoPath, status: 'UPLOADED' },
+    });
   }
 
   // --- AI worker output serving (Features #3/#4) ---
   //
   // A match's analysis lives on disk under WORKER_OUTPUTS_DIR/<runId> (the same
   // folder the AI worker writes to). Until a real run is linked, we fall back to
-  // WORKER_DEMO_DIR so the dashboard has data to show. A missing file yields a
-  // 404, which the frontend already handles by showing its mock fallback.
+  // WORKER_DEMO_DIR so the dashboard has data to show. These endpoints are public
+  // (the browser loads them directly via <img>/<video>), so they resolve by match
+  // id only and never assert ownership.
+
+  /** Look up a match without owner scoping (for the public media endpoints). */
+  private async getMatchOrThrow(id: string) {
+    const match = await this.prisma.match.findUnique({ where: { id } });
+    if (!match) throw new NotFoundException(`Match ${id} not found`);
+    return match;
+  }
 
   /** Resolve the on-disk run directory for a match, or null if none exists. */
   private resolveRunDir(runId: string | null): string | null {
@@ -88,7 +110,7 @@ export class MatchesService {
 
   /** Run directory for a match id, throwing 404 when nothing is available. */
   private async runDirFor(id: string): Promise<string> {
-    const match = await this.findOne(id);
+    const match = await this.getMatchOrThrow(id);
     const dir = this.resolveRunDir(match.runId);
     if (!dir) throw new NotFoundException(`No analysis output for match ${id}`);
     return dir;
