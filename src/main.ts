@@ -3,10 +3,14 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Reads the httpOnly session cookie set by /auth/login and /auth/register.
+  app.use(cookieParser());
 
   // Everything lives under /api so the frontend can point at http://localhost:4000/api
   app.setGlobalPrefix('api');
