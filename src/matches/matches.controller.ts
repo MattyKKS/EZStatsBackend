@@ -91,7 +91,8 @@ export class MatchesController {
     @CurrentUser() userId: string,
   ) {
     if (!file) throw new BadRequestException('No video file provided');
-    return this.matches.setVideo(id, `/uploads/videos/${file.filename}`, userId);
+    // Transcodes to H.264 when needed so the browser can play it back.
+    return this.matches.ingestVideo(id, file.filename, userId);
   }
 
   // --- Player ID mapping (Feature #6) ---

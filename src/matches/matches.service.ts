@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { existsSync } from 'fs';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { spawn } from 'child_process';
+import { existsSync, unlinkSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join, resolve, sep } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,6 +14,46 @@ const VIDEO_FILES: Record<'stats' | 'spatial', string[]> = {
   stats: ['stats_video.mp4', 'processed_video.mp4'],
   spatial: ['spatial_video.mp4', 'radar_video.mp4'],
 };
+
+const FFMPEG = process.env.FFMPEG_PATH?.trim() || 'ffmpeg';
+const FFPROBE = process.env.FFPROBE_PATH?.trim() || 'ffprobe';
+
+/** Video codec of a file's first video stream (e.g. "h264"), or null if unknown. */
+function probeVideoCodec(input: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const proc = spawn(
+      FFPROBE,
+      ['-v', 'error', '-select_streams', 'v:0', '-show_entries',
+        'stream=codec_name', '-of', 'default=nw=1:nk=1', input],
+      { windowsHide: true },
+    );
+    let out = '';
+    proc.stdout.on('data', (d) => (out += d.toString()));
+    proc.on('error', () => resolve(null)); // ffprobe missing
+    proc.on('close', () => resolve(out.trim() || null));
+  });
+}
+
+/** Transcode to browser-playable H.264/AAC mp4 (faststart), capped at 1280 wide. */
+function transcodeToH264(input: string, output: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(
+      FFMPEG,
+      ['-y', '-i', input,
+        '-vf', "scale='min(1280,iw)':-2",
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-movflags', '+faststart', output],
+      { windowsHide: true },
+    );
+    let err = '';
+    proc.stderr.on('data', (d) => (err += d.toString()));
+    proc.on('error', reject); // ffmpeg missing
+    proc.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}: ${err.slice(-400)}`)),
+    );
+  });
+}
 
 @Injectable()
 export class MatchesService {
@@ -72,9 +113,44 @@ export class MatchesService {
     return this.prisma.match.delete({ where: { id } });
   }
 
-  /** Attach an uploaded video file to a match (local storage for now). */
-  async setVideo(id: string, videoPath: string, userId: string) {
+  private readonly logger = new Logger(MatchesService.name);
+
+  /**
+   * Attach an uploaded video to a match. Transcodes to browser-playable H.264
+   * when the source codec isn't (e.g. MPEG-4 Part 2, HEVC); if the source is
+   * already H.264 it's served as-is. If ffmpeg is unavailable the raw file is
+   * kept so the upload is never lost.
+   */
+  async ingestVideo(id: string, rawFilename: string, userId: string) {
     await this.findOne(id, userId);
+    const dir = join(process.cwd(), 'uploads', 'videos');
+    const rawPath = join(dir, rawFilename);
+
+    const codec = await probeVideoCodec(rawPath);
+    if (codec === 'h264') {
+      return this.saveVideoPath(id, `/uploads/videos/${rawFilename}`);
+    }
+
+    const outName = `${rawFilename.replace(/\.[^.]+$/, '')}-h264.mp4`;
+    const outPath = join(dir, outName);
+    try {
+      await transcodeToH264(rawPath, outPath);
+      try {
+        if (existsSync(rawPath)) unlinkSync(rawPath);
+      } catch {
+        /* leaving the raw file behind is harmless */
+      }
+      return this.saveVideoPath(id, `/uploads/videos/${outName}`);
+    } catch (e) {
+      // ffmpeg missing or failed — keep the raw upload (may not play in-browser).
+      this.logger.warn(
+        `Transcode failed for match ${id} (${String(e)}); serving raw upload.`,
+      );
+      return this.saveVideoPath(id, `/uploads/videos/${rawFilename}`);
+    }
+  }
+
+  private saveVideoPath(id: string, videoPath: string) {
     return this.prisma.match.update({
       where: { id },
       data: { videoPath, status: 'UPLOADED' },
