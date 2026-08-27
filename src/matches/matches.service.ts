@@ -211,6 +211,100 @@ export class MatchesService {
     });
   }
 
+  /**
+   * Per-player stats for a match: each detected track's stats are attributed to
+   * the real roster player it's mapped to, and stats from multiple tracks mapped
+   * to the SAME player are summed (this is how "combining two IDs" works — the
+   * user maps both tracks to one player). Tracks with no mapping are returned
+   * separately so the UI can still show/assign them.
+   */
+  async getPlayerStats(id: string, userId: string) {
+    const match = await this.findOne(id, userId);
+
+    const report = (await this.getReport(id)) as {
+      players?: Array<{
+        track_id: number;
+        label: string;
+        team_id: number;
+        touches: number;
+        passes: number;
+        shots: number;
+        distance_px: number;
+      }>;
+    };
+    const tracks = report.players ?? [];
+
+    const maps = await this.prisma.playerTrackMap.findMany({
+      where: { matchId: id },
+    });
+    const trackToPlayer = new Map(maps.map((m) => [m.trackId, m.playerId]));
+
+    const roster = await this.prisma.player.findMany({
+      where: { teamId: match.teamId },
+      select: { id: true, name: true, jerseyNumber: true },
+    });
+    const rosterById = new Map(roster.map((p) => [p.id, p]));
+
+    type Agg = {
+      playerId: string;
+      name: string;
+      jerseyNumber: number | null;
+      trackIds: number[];
+      touches: number;
+      passes: number;
+      shots: number;
+      distancePx: number;
+    };
+    const byPlayer = new Map<string, Agg>();
+    const unmapped: Array<{
+      trackId: number;
+      label: string;
+      touches: number;
+      passes: number;
+      shots: number;
+      distancePx: number;
+    }> = [];
+
+    for (const t of tracks) {
+      const pid = trackToPlayer.get(t.track_id);
+      const rp = pid ? rosterById.get(pid) : undefined;
+      if (pid && rp) {
+        const agg: Agg =
+          byPlayer.get(pid) ??
+          {
+            playerId: pid,
+            name: rp.name,
+            jerseyNumber: rp.jerseyNumber,
+            trackIds: [],
+            touches: 0,
+            passes: 0,
+            shots: 0,
+            distancePx: 0,
+          };
+        agg.trackIds.push(t.track_id);
+        agg.touches += t.touches ?? 0;
+        agg.passes += t.passes ?? 0;
+        agg.shots += t.shots ?? 0;
+        agg.distancePx += t.distance_px ?? 0;
+        byPlayer.set(pid, agg);
+      } else {
+        unmapped.push({
+          trackId: t.track_id,
+          label: t.label,
+          touches: t.touches ?? 0,
+          passes: t.passes ?? 0,
+          shots: t.shots ?? 0,
+          distancePx: t.distance_px ?? 0,
+        });
+      }
+    }
+
+    const players = [...byPlayer.values()].sort(
+      (a, b) => (a.jerseyNumber ?? 999) - (b.jerseyNumber ?? 999),
+    );
+    return { players, unmapped };
+  }
+
   // --- AI worker output serving (Features #3/#4) ---
   //
   // A match's analysis lives on disk under WORKER_OUTPUTS_DIR/<runId> (the same

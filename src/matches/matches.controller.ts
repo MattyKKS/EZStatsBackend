@@ -111,6 +111,13 @@ export class MatchesController {
     return this.matches.setTrackMaps(id, dto.maps, userId);
   }
 
+  // Per-player stats: track stats attributed to the mapped roster player,
+  // summed across tracks mapped to the same player (combined IDs).
+  @Get('matches/:id/player-stats')
+  getPlayerStats(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.matches.getPlayerStats(id, userId);
+  }
+
   // --- AI worker output (public: loaded directly via <img>/<video>) ---
 
   @Public()
