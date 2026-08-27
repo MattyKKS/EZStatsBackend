@@ -12,13 +12,16 @@ import { UpdatePlayerDto } from './dto/update-player.dto';
 export class PlayersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async assertTeamExists(teamId: string) {
+  // A team must exist AND belong to the current user, else 404 (no leak).
+  private async assertTeamOwned(teamId: string, userId: string) {
     const team = await this.prisma.team.findUnique({ where: { id: teamId } });
-    if (!team) throw new NotFoundException(`Team ${teamId} not found`);
+    if (!team || team.ownerId !== userId) {
+      throw new NotFoundException(`Team ${teamId} not found`);
+    }
   }
 
-  async create(teamId: string, dto: CreatePlayerDto) {
-    await this.assertTeamExists(teamId);
+  async create(teamId: string, dto: CreatePlayerDto, userId: string) {
+    await this.assertTeamOwned(teamId, userId);
     try {
       return await this.prisma.player.create({ data: { ...dto, teamId } });
     } catch (e) {
@@ -26,22 +29,23 @@ export class PlayersService {
     }
   }
 
-  async findAllForTeam(teamId: string) {
-    await this.assertTeamExists(teamId);
+  async findAllForTeam(teamId: string, userId: string) {
+    await this.assertTeamOwned(teamId, userId);
     return this.prisma.player.findMany({
       where: { teamId },
       orderBy: { jerseyNumber: 'asc' },
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId: string) {
     const player = await this.prisma.player.findUnique({ where: { id } });
     if (!player) throw new NotFoundException(`Player ${id} not found`);
+    await this.assertTeamOwned(player.teamId, userId);
     return player;
   }
 
-  async update(id: string, dto: UpdatePlayerDto) {
-    await this.findOne(id);
+  async update(id: string, dto: UpdatePlayerDto, userId: string) {
+    await this.findOne(id, userId);
     try {
       return await this.prisma.player.update({ where: { id }, data: dto });
     } catch (e) {
@@ -49,8 +53,8 @@ export class PlayersService {
     }
   }
 
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, userId: string) {
+    await this.findOne(id, userId);
     return this.prisma.player.delete({ where: { id } });
   }
 

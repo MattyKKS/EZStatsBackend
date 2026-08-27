@@ -19,6 +19,7 @@ async function bootstrap() {
   // Stored on local disk now; swap this folder for S3/Supabase later with no API change.
   const uploadsDir = join(process.cwd(), 'uploads');
   mkdirSync(uploadsDir, { recursive: true });
+  mkdirSync(join(uploadsDir, 'videos'), { recursive: true });
   app.useStaticAssets(uploadsDir, { prefix: '/api/uploads/' });
 
   // Validate + strip unknown fields on every incoming DTO.

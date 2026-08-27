@@ -18,6 +18,7 @@ import { extname } from 'path';
 import { TeamsService } from './teams.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 // 2 MB cap; logos are small.
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -28,28 +29,32 @@ export class TeamsController {
   constructor(private readonly teams: TeamsService) {}
 
   @Post()
-  create(@Body() dto: CreateTeamDto) {
-    return this.teams.create(dto);
+  create(@Body() dto: CreateTeamDto, @CurrentUser() userId: string) {
+    return this.teams.create(dto, userId);
   }
 
   @Get()
-  findAll() {
-    return this.teams.findAll();
+  findAll(@CurrentUser() userId: string) {
+    return this.teams.findAll(userId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.teams.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.teams.findOne(id, userId);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateTeamDto) {
-    return this.teams.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateTeamDto,
+    @CurrentUser() userId: string,
+  ) {
+    return this.teams.update(id, dto, userId);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.teams.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.teams.remove(id, userId);
   }
 
   // --- Logo upload ---
@@ -86,12 +91,13 @@ export class TeamsController {
       }),
     )
     file: Express.Multer.File,
+    @CurrentUser() userId: string,
   ) {
-    return this.teams.setLogo(id, file.filename);
+    return this.teams.setLogo(id, file.filename, userId);
   }
 
   @Delete(':id/logo')
-  removeLogo(@Param('id') id: string) {
-    return this.teams.clearLogo(id);
+  removeLogo(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.teams.clearLogo(id, userId);
   }
 }
