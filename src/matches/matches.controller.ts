@@ -17,6 +17,7 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import type { Request, Response } from 'express';
 import { MatchesService } from './matches.service';
+import { AiWorkerService } from './ai-worker.service';
 import { CreateMatchDto } from './dto/create-match.dto';
 import { UpdateMatchDto } from './dto/update-match.dto';
 import { SetTrackMapsDto } from './dto/set-track-maps.dto';
@@ -28,7 +29,10 @@ const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 
 @Controller()
 export class MatchesController {
-  constructor(private readonly matches: MatchesService) {}
+  constructor(
+    private readonly matches: MatchesService,
+    private readonly aiWorker: AiWorkerService,
+  ) {}
 
   // Match sessions live under a team.
   @Post('teams/:teamId/matches')
@@ -93,6 +97,29 @@ export class MatchesController {
     if (!file) throw new BadRequestException('No video file provided');
     // Transcodes to H.264 when needed so the browser can play it back.
     return this.matches.ingestVideo(id, file.filename, userId);
+  }
+
+  /**
+   * Start the AI worker on a match's uploaded video.
+   *
+   * Separate from upload on purpose. A full run takes minutes to hours, so an
+   * upload does not trigger it unless AI_WORKER_AUTORUN=true. This endpoint is
+   * how an operator starts processing deliberately.
+   */
+  @Post('matches/:id/process')
+  async process(@Param('id') id: string, @CurrentUser() userId: string) {
+    const match = await this.matches.findOne(id, userId);
+    if (!match.videoPath) {
+      throw new BadRequestException('Upload a video before processing');
+    }
+    await this.aiWorker.runNow(id, match.videoPath);
+    return { started: true, matchId: id, status: 'QUEUED' };
+  }
+
+  /** Whether autorun is armed, and where the worker is expected to live. */
+  @Get('matches/ai-worker/status')
+  aiWorkerStatus() {
+    return this.aiWorker.describe();
   }
 
   // --- Player ID mapping (Feature #6) ---
