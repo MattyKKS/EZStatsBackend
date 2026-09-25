@@ -320,12 +320,47 @@ export class MatchesService {
     return match;
   }
 
+  /**
+   * Demo runs keyed by a substring of the uploaded filename, from
+   * WORKER_DEMO_ALIASES, formatted as `key:path;key:path`.
+   *
+   * Until the worker is actually run on an upload, a match has no output of its
+   * own. Rather than show every upload the same clip, this picks the prepared
+   * run that corresponds to the video the user chose, so uploading the Messi
+   * clip shows the Messi analysis and uploading the benchmark clip shows that
+   * one. Anything unrecognised falls back to WORKER_DEMO_DIR.
+   */
+  private demoAliases(): Array<{ key: string; dir: string }> {
+    const raw = process.env.WORKER_DEMO_ALIASES?.trim();
+    if (!raw) return [];
+    return raw
+      .split(';')
+      .map((pair) => pair.trim())
+      .filter(Boolean)
+      .map((pair) => {
+        const idx = pair.indexOf(':');
+        // A Windows path contains ':' too, so split on the FIRST one only.
+        if (idx <= 0) return null;
+        return {
+          key: pair.slice(0, idx).trim().toLowerCase(),
+          dir: pair.slice(idx + 1).trim(),
+        };
+      })
+      .filter((x): x is { key: string; dir: string } => !!x && existsSync(x.dir));
+  }
+
   /** Resolve the on-disk run directory for a match, or null if none exists. */
-  private resolveRunDir(runId: string | null): string | null {
+  private resolveRunDir(runId: string | null, videoPath?: string | null): string | null {
     const base = process.env.WORKER_OUTPUTS_DIR?.trim();
     if (base && runId) {
       const dir = join(base, runId);
       if (existsSync(dir)) return dir;
+    }
+    if (videoPath) {
+      const name = videoPath.toLowerCase();
+      for (const { key, dir } of this.demoAliases()) {
+        if (name.includes(key)) return dir;
+      }
     }
     const demo = process.env.WORKER_DEMO_DIR?.trim();
     if (demo && existsSync(demo)) return demo;
@@ -335,7 +370,7 @@ export class MatchesService {
   /** Run directory for a match id, throwing 404 when nothing is available. */
   private async runDirFor(id: string): Promise<string> {
     const match = await this.getMatchOrThrow(id);
-    const dir = this.resolveRunDir(match.runId);
+    const dir = this.resolveRunDir(match.runId, match.videoPath);
     if (!dir) throw new NotFoundException(`No analysis output for match ${id}`);
     return dir;
   }
